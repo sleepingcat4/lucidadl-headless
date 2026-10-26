@@ -290,9 +290,28 @@ Useful download options:
 | `--keep-original` | Keep the source FLAC after conversion |
 | `--flat` | Place files under `Music/` instead of organizing from tags |
 | `--force` | Ignore download history and fetch the item again |
+| `--headless` | Run Chromium without a display (also `LUCIDA_HEADLESS=1`) |
 | `--hidden` | Move a necessary Cloudflare browser window off-screen |
 
 Run `lucida <command> --help` for the complete options of a command.
+
+### Headless servers (Hetzner/Linux)
+
+Use `--headless` on download commands, `setup`, and `doctor`, or set the
+environment variable for all browser launches (including the interactive menu):
+
+```bash
+python -m playwright install --with-deps chromium
+export LUCIDA_HEADLESS=1
+lucida setup --headless
+lucida doctor --live --headless
+lucida search "Artist Song" --headless
+```
+
+Headless mode requires no desktop or X server and takes precedence over `--hidden`.
+Cloudflare may still reject headless Chromium or a datacenter IP. If verification
+fails, use headed Chromium with a virtual display and VNC on the same server to
+complete any interactive check. Headless mode does not guarantee clearance.
 
 ## Access, failures, and diagnostics
 

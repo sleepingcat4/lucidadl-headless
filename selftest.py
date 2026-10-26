@@ -813,6 +813,43 @@ check("setup: installs a missing browser before preparing access",
 # no Cloudflare challenge -> no cf_clearance cookie; the UA alone is still saved
 from lucidadl import session as _session
 
+# Headless selection reaches the actual launcher, including --hidden precedence.
+async def _headless_launch_test():
+    from unittest.mock import MagicMock
+    with tempfile.TemporaryDirectory() as profile:
+        ctx = MagicMock()
+        ctx.close = _AsyncMock()
+        chromium = MagicMock()
+        chromium.launch_persistent_context = _AsyncMock(return_value=ctx)
+        pw = MagicMock()
+        pw.chromium = chromium
+        manager = MagicMock()
+        manager.__aenter__ = _AsyncMock(return_value=pw)
+        manager.__aexit__ = _AsyncMock(return_value=False)
+        with _patch.object(_session, "async_playwright", return_value=manager), \
+             _patch.object(_session, "USER_DATA_DIR", profile), \
+             _patch.dict(_os.environ, {"LUCIDA_HEADLESS": "1"}):
+            async with _session.lucida_context(hidden=True):
+                pass
+        opts = chromium.launch_persistent_context.call_args.kwargs
+        return opts["headless"] and not any(
+            arg.startswith("--window-position") for arg in opts["args"])
+
+check("headless: environment forces display-free launch even with hidden",
+      _aio.run(_headless_launch_test()))
+
+for _args, _expected in [(["setup", "--headless"], True), (["setup"], False)]:
+    _modes = []
+    async def _record_setup():
+        _modes.append(_session.headless_enabled())
+        return True
+    with _patch.dict(_os.environ, {"LUCIDA_HEADLESS": "0"}), \
+         _patch.object(_cli, "_setup", _record_setup):
+        _result = _CliRunner().invoke(_cli.cli, _args)
+    check("headless: CLI mode scoped to invocation " + str(_expected),
+          _result.exit_code == 0 and _modes == [_expected]
+          and not _session.HEADLESS.get())
+
 class _NoCookiePage:
     url = _session.LUCIDA + "/"
     async def goto(self, *_args, **_kwargs):

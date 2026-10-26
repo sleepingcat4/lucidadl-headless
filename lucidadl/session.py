@@ -1,7 +1,7 @@
 """
 Async browser session manager for lucida.to.
 
-lucida.to is behind Cloudflare; headless is challenged, so we drive a *headed*,
+lucida.to is behind Cloudflare; we default to headed but support headless,
 *persistent* Chromium (profile in .userdata/profile) whose cf_clearance cookie is
 reused across runs. One context is shared by all tabs, so concurrent downloads
 ride the same Cloudflare clearance.
@@ -15,6 +15,7 @@ import os
 import sys
 import time
 from contextlib import asynccontextmanager
+from contextvars import ContextVar
 from typing import AsyncIterator, Optional, Tuple
 from urllib.parse import urlsplit
 
@@ -23,6 +24,15 @@ from playwright.async_api import (
 )
 
 from . import paths
+
+HEADLESS = ContextVar("lucida_headless", default=False)
+
+
+def headless_enabled() -> bool:
+    return HEADLESS.get() or os.environ.get("LUCIDA_HEADLESS", "").lower() in (
+        "1", "true", "yes", "on",
+    )
+
 
 LUCIDA = "https://lucida.to"
 USER_DATA_DIR = paths.PROFILE_DIR
@@ -86,18 +96,19 @@ async def is_challenged(page: Page) -> bool:
 async def lucida_context(headless: bool = False, channel: Optional[str] = None,
                         downloads_dir: Optional[str] = None, hidden: bool = False
                         ) -> AsyncIterator[BrowserContext]:
-    """A real (headed) Chromium passes Cloudflare; true headless is challenged and
-    fails. `hidden=True` keeps it headed but moves the window off-screen, so it runs
-    invisibly (in the background) while still clearing Cloudflare. It still needs a
-    logged-in desktop session."""
+    """Launch persistent Chromium, optionally without a display.
+
+    Forced headless mode takes precedence over hidden windows and headed fallbacks.
+    Cloudflare may reject headless mode; hidden mode still requires a desktop.
+    """
+    headless = headless or headless_enabled()
     channel = channel or os.environ.get("LUCIDA_CHANNEL") or None
     os.makedirs(USER_DATA_DIR, exist_ok=True)
     if downloads_dir:
         os.makedirs(downloads_dir, exist_ok=True)
 
     args = ["--disable-blink-features=AutomationControlled", "--no-first-run"]
-    if hidden:
-        headless = False  # off-screen headed clears Cloudflare; true headless does not
+    if hidden and not headless:
         args += ["--window-position=-32000,-32000", "--window-size=1366,900"]
 
     base_kwargs = dict(
@@ -178,7 +189,11 @@ async def acquire_clearance(hidden: bool = False) -> Tuple[Optional[str], str]:
     Raises BrowserClosed / RuntimeError on failure."""
     async with lucida_context(hidden=hidden) as ctx:
         if not await ensure_cleared(ctx, timeout=180):
-            raise RuntimeError("Cloudflare not cleared")
+            raise RuntimeError(
+                "Cloudflare not cleared in headless mode; try headed Chromium "
+                "with Xvfb/VNC on this server."
+                if headless_enabled() else "Cloudflare not cleared"
+            )
         cookies = await ctx.cookies("https://lucida.to")
         cf = next((c["value"] for c in cookies if c["name"] == "cf_clearance"), None)
         page = ctx.pages[0] if ctx.pages else await ctx.new_page()

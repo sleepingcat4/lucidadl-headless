@@ -8,6 +8,7 @@ import os
 import sys
 import time
 import traceback
+from functools import wraps
 from typing import Dict, List, Optional, Tuple
 
 import click
@@ -20,7 +21,7 @@ from .downloader import preview_tracks, run_batch
 from .models import FailedItem
 from .session import (lucida_context, ensure_cleared, get_page, BrowserClosed,
                       acquire_clearance, load_clearance, chromium_installed,
-                      install_chromium)
+                      install_chromium, HEADLESS, headless_enabled)
 
 # App data (cookie/profile/state/log/failed list) lives in the fixed user data dir.
 # Downloads go to ONE fixed, configurable music directory (never the cwd). Default
@@ -199,7 +200,24 @@ def _exit_if_failed(result: RunResult) -> None:
         raise click.exceptions.Exit(1)
 
 
+def _browser_opts(f):
+    @click.option(
+        "--headless", is_flag=True, envvar="LUCIDA_HEADLESS",
+        help="Run Chromium without a display (servers). Cloudflare may reject it. "
+             "Also configurable with LUCIDA_HEADLESS=1.",
+    )
+    @wraps(f)
+    def wrapped(*args, headless=False, **kwargs):
+        token = HEADLESS.set(headless)
+        try:
+            return f(*args, **kwargs)
+        finally:
+            HEADLESS.reset(token)
+    return wrapped
+
+
 def _service_opts(f):
+    f = _browser_opts(f)
     f = click.option("-s", "--service", default="qobuz",
                      help="Source service (qobuz by default; amazon, grilledcheese).")(f)
     f = click.option("--country", default=None, help="Country code (def: NL for qobuz).")(f)
@@ -974,7 +992,10 @@ async def _setup() -> bool:
         click.secho("      ✓ Chromium is ready", fg="green")
 
     click.echo("[2/2] Opening lucida.to…")
-    click.echo("      Complete the Cloudflare check in the browser if it appears.")
+    if headless_enabled():
+        click.echo("      Trying headless Chromium; interactive challenges may fail.")
+    else:
+        click.echo("      Complete the Cloudflare check in the browser if it appears.")
     try:
         await acquire_clearance(hidden=False)  # clears CF and SAVES the cookie to disk
     except BrowserClosed:
@@ -989,6 +1010,7 @@ async def _setup() -> bool:
 
 
 @cli.command()
+@_browser_opts
 def setup():
     """Install the browser if needed, then prepare access to lucida.to."""
     if not asyncio.run(_setup()):
@@ -1053,6 +1075,7 @@ async def _doctor(live: bool = False) -> bool:
 
 
 @cli.command()
+@_browser_opts
 @click.option("--live", is_flag=True,
               help="Open the browser and verify access to lucida.to.")
 def doctor(live):
