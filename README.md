@@ -321,6 +321,7 @@ Install from this checkout:
 
 ```bash
 python -m pip install '.[solver]'
+python -m playwright install-deps firefox  # Ubuntu/Debian: run as root or with sudo
 python -m camoufox fetch
 export LUCIDA_CF_SOLVER=cloudflare-solver
 lucida setup

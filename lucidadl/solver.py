@@ -11,6 +11,8 @@ import random
 import sys
 import time
 
+from playwright.async_api import Error as PlaywrightError
+
 # Upstream license (retained in packaged source):
 # MIT License
 # 
@@ -105,3 +107,11 @@ async def acquire(timeout=180):
         return await asyncio.wait_for(solve(), timeout=timeout)
     except asyncio.TimeoutError as exc:
         raise RuntimeError("Cloudflare solver timed out; clearance was not saved") from exc
+    except PlaywrightError as exc:
+        if "cannot open shared object file" in str(exc) or "Couldn't load XPCOM" in str(exc):
+            raise RuntimeError(
+                "Camoufox is missing Linux system libraries. On Ubuntu/Debian, run "
+                "`python -m playwright install-deps firefox` as root (or with sudo), "
+                "then retry setup. Headless Firefox still requires GTK libraries."
+            ) from exc
+        raise
