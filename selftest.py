@@ -850,6 +850,42 @@ for _args, _expected in [(["setup", "--headless"], True), (["setup"], False)]:
           _result.exit_code == 0 and _modes == [_expected]
           and not _session.HEADLESS.get())
 
+# Optional backend selection and failed solves must not overwrite saved access.
+from lucidadl import solver as _solver
+
+async def _solver_dispatch_test(fail=False):
+    token = _session.CF_SOLVER.set("cloudflare-solver")
+    try:
+        acquire = _AsyncMock(side_effect=RuntimeError("failed")) if fail else _AsyncMock(
+            return_value=("SOLVED", "Actual Firefox UA"))
+        with _patch.object(_solver, "acquire", acquire), \
+             _patch.object(_session, "save_clearance") as save, \
+             _patch.object(_session, "lucida_context") as chromium:
+            try:
+                result = await _session.acquire_clearance()
+            except RuntimeError:
+                return fail and not save.called and not chromium.called
+            return (result == ("SOLVED", "Actual Firefox UA")
+                    and save.call_args.args == result and not chromium.called)
+    finally:
+        _session.CF_SOLVER.reset(token)
+
+check("solver: cookie and original UA saved without Chromium",
+      _aio.run(_solver_dispatch_test()))
+check("solver: failed solve preserves saved access",
+      _aio.run(_solver_dispatch_test(fail=True)))
+
+_solver_modes = []
+async def _record_solver_setup():
+    _solver_modes.append(_session.clearance_backend())
+    return True
+with _patch.object(_cli, "_setup", _record_solver_setup):
+    _solver_cli = _CliRunner().invoke(
+        _cli.cli, ["setup", "--cf-solver", "cloudflare-solver"])
+check("solver: CLI backend selection is scoped to invocation",
+      _solver_cli.exit_code == 0 and _solver_modes == ["cloudflare-solver"]
+      and _session.CF_SOLVER.get() is None)
+
 class _NoCookiePage:
     url = _session.LUCIDA + "/"
     async def goto(self, *_args, **_kwargs):
@@ -1153,6 +1189,45 @@ check("cli: developer debug command is hidden", "  debug " not in _help.output)
 _version = _runner.invoke(_cli.cli, ["--version"])
 check("cli: source version matches release metadata",
       _version.exit_code == 0 and "1.4.3" in _version.output)  # x-release-please-version
+
+# Exercise the adapted solver lifecycle without a browser or optional dependencies.
+async def _adapted_solver_test(timeout=False):
+    from unittest.mock import MagicMock
+    page = MagicMock()
+    page.url = _session.LUCIDA + "/"
+    page.goto = _AsyncMock(return_value=type("Response", (), {"ok": True})())
+    page.evaluate = _AsyncMock(return_value="Firefox exact UA")
+    page.wait_for_timeout = _AsyncMock()
+    ctx = MagicMock()
+    ctx.new_page = _AsyncMock(return_value=page)
+    ctx.cookies = _AsyncMock(return_value=[{"name": "cf_clearance", "value": "CF"}])
+    ctx.close = _AsyncMock()
+    browser = MagicMock()
+    browser.new_context = _AsyncMock(return_value=ctx)
+    manager = MagicMock()
+    manager.__aenter__ = _AsyncMock(return_value=browser)
+    manager.__aexit__ = _AsyncMock(return_value=False)
+    factory = MagicMock(return_value=manager)
+    async def blocked(_page):
+        await _aio.sleep(1)
+        return True
+    challenged = blocked if timeout else _AsyncMock(side_effect=[True, False])
+    with _patch.object(_solver, "_camoufox", return_value=factory), \
+         _patch.object(_session, "is_challenged", challenged):
+        try:
+            result = await _solver.acquire(timeout=0.01 if timeout else 1)
+        except RuntimeError as exc:
+            return (timeout and "timed out" in str(exc)
+                    and ctx.close.await_count == 1
+                    and manager.__aexit__.await_count == 1)
+    return (result == ("CF", "Firefox exact UA")
+            and factory.call_args.kwargs["headless"] is True
+            and ctx.close.await_count == 1 and manager.__aexit__.await_count == 1)
+
+check("solver: waits for clearance and retains exact UA, closes browser",
+      _aio.run(_adapted_solver_test()))
+check("solver: timeout closes context and browser",
+      _aio.run(_adapted_solver_test(timeout=True)))
 
 print()
 if fails:

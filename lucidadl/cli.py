@@ -21,7 +21,7 @@ from .downloader import preview_tracks, run_batch
 from .models import FailedItem
 from .session import (lucida_context, ensure_cleared, get_page, BrowserClosed,
                       acquire_clearance, load_clearance, chromium_installed,
-                      install_chromium, HEADLESS, headless_enabled)
+                      install_chromium, HEADLESS, headless_enabled, CF_SOLVER, clearance_backend)
 
 # App data (cookie/profile/state/log/failed list) lives in the fixed user data dir.
 # Downloads go to ONE fixed, configurable music directory (never the cwd). Default
@@ -202,17 +202,24 @@ def _exit_if_failed(result: RunResult) -> None:
 
 def _browser_opts(f):
     @click.option(
+        "--cf-solver", type=click.Choice(["chromium", "cloudflare-solver"]),
+        default=None, envvar="LUCIDA_CF_SOLVER",
+        help="Clearance backend. cloudflare-solver uses headless Camoufox (optional extra).",
+    )
+    @click.option(
         "--headless", is_flag=True, envvar="LUCIDA_HEADLESS",
         help="Run Chromium without a display (servers). Cloudflare may reject it. "
              "Also configurable with LUCIDA_HEADLESS=1.",
     )
     @wraps(f)
-    def wrapped(*args, headless=False, **kwargs):
+    def wrapped(*args, headless=False, cf_solver=None, **kwargs):
+        solver_token = CF_SOLVER.set(cf_solver)
         token = HEADLESS.set(headless)
         try:
             return f(*args, **kwargs)
         finally:
             HEADLESS.reset(token)
+            CF_SOLVER.reset(solver_token)
     return wrapped
 
 
@@ -978,10 +985,26 @@ def cleanup_cmd():
     """Prune missing download records and partial files older than 24 hours."""
     _cleanup()
 
+async def _clearance_browser_ready():
+    if clearance_backend() == "cloudflare-solver":
+        from .solver import installed
+        return await installed()
+    return await chromium_installed()
+
+
 async def _setup() -> bool:
     click.secho("\nlucidadl setup", bold=True)
     click.echo("[1/2] Checking the browser…")
-    if not await chromium_installed():
+    if clearance_backend() == "cloudflare-solver":
+        from .solver import install
+        try:
+            if not await _clearance_browser_ready() and not await install():
+                click.secho("Camoufox installation failed. Run: python -m camoufox fetch", fg="red")
+                return False
+        except Exception as exc:
+            click.secho(str(exc), fg="red")
+            return False
+    elif not await chromium_installed():
         click.echo("      Chromium is missing. Downloading it once for lucidadl…")
         if not await install_chromium():
             click.secho("✗ Chromium could not be installed.", fg="red")
@@ -992,8 +1015,8 @@ async def _setup() -> bool:
         click.secho("      ✓ Chromium is ready", fg="green")
 
     click.echo("[2/2] Opening lucida.to…")
-    if headless_enabled():
-        click.echo("      Trying headless Chromium; interactive challenges may fail.")
+    if headless_enabled() or clearance_backend() == "cloudflare-solver":
+        click.echo("      Trying a headless browser; interactive challenges may fail.")
     else:
         click.echo("      Complete the Cloudflare check in the browser if it appears.")
     try:
@@ -1018,7 +1041,7 @@ def setup():
 
 
 async def _doctor(live: bool = False) -> bool:
-    browser_ok = await chromium_installed()
+    browser_ok = await _clearance_browser_ready()
     ffmpeg_ok = transcode.available()
     cf, ua = load_clearance()
     access_ok = bool(ua)
@@ -1047,13 +1070,17 @@ async def _doctor(live: bool = False) -> bool:
     live_ok = True
     if live:
         if not browser_ok:
-            click.secho("\nLive check skipped: Chromium is missing.", fg="yellow")
+            click.secho("\nLive check skipped: selected browser backend is missing.", fg="yellow")
             live_ok = False
         else:
             click.echo("\nOpening the browser to test lucida.to…")
             try:
-                async with lucida_context(headless=False) as ctx:
-                    live_ok = await ensure_cleared(ctx, timeout=120)
+                if clearance_backend() == "cloudflare-solver":
+                    await acquire_clearance()
+                    live_ok = True
+                else:
+                    async with lucida_context(headless=False) as ctx:
+                        live_ok = await ensure_cleared(ctx, timeout=120)
                 click.secho("✓ lucida.to is reachable" if live_ok
                             else "⚠ Cloudflare was not cleared",
                             fg="green" if live_ok else "yellow")

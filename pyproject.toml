@@ -44,6 +44,7 @@ lucidadl = "lucidadl.cli:cli"
 
 [project.optional-dependencies]
 dev = ["build", "twine"]
+solver = ["camoufox==0.4.11", "browserforge==1.2.3"]
 
 [project.urls]
 Homepage = "https://github.com/Jude-A/lucidadl"

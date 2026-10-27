@@ -313,6 +313,29 @@ Cloudflare may still reject headless Chromium or a datacenter IP. If verificatio
 fails, use headed Chromium with a virtual display and VNC on the same server to
 complete any interactive check. Headless mode does not guarantee clearance.
 
+### Optional Cloudflare solver
+
+An optional headless Camoufox backend adapts the challenge flow from
+[art3m4ik3/cloudflare-solver](https://github.com/art3m4ik3/cloudflare-solver).
+Install from this checkout:
+
+```bash
+python -m pip install '.[solver]'
+python -m camoufox fetch
+export LUCIDA_CF_SOLVER=cloudflare-solver
+lucida setup
+lucida doctor --live
+lucida search "Artist Song"
+```
+
+Or select it per command with `--cf-solver cloudflare-solver`. This backend always
+runs headless. `--cf-solver chromium` selects the original backend. The solver
+captures the cookie and actual browser user agent together; existing saved access
+is reused until it expires. Run setup to refresh access immediately after switching.
+Playlist imports still use Playwright Chromium; add `LUCIDA_HEADLESS=1` to keep those
+headless as well. Camoufox needs its Linux system libraries installed on your server.
+Challenge solving has a 180-second limit and may fail for some challenges or IPs.
+
 ## Access, failures, and diagnostics
 
 Cloudflare access is prepared once in a real Chromium window. Downloads then use a

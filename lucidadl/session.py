@@ -25,6 +25,16 @@ from playwright.async_api import (
 
 from . import paths
 
+CF_SOLVER = ContextVar("lucida_cf_solver", default=None)
+
+
+def clearance_backend():
+    backend = CF_SOLVER.get() or os.environ.get("LUCIDA_CF_SOLVER", "chromium")
+    if backend not in ("chromium", "cloudflare-solver"):
+        raise RuntimeError("LUCIDA_CF_SOLVER must be chromium or cloudflare-solver")
+    return backend
+
+
 HEADLESS = ContextVar("lucida_headless", default=False)
 
 
@@ -187,6 +197,11 @@ async def acquire_clearance(hidden: bool = False) -> Tuple[Optional[str], str]:
     cf is None when Cloudflare let the page through without a challenge (no cookie is
     issued then); the UA alone is enough until a 403 triggers a fresh acquire.
     Raises BrowserClosed / RuntimeError on failure."""
+    if clearance_backend() == "cloudflare-solver":
+        from .solver import acquire
+        cf, ua = await acquire()
+        save_clearance(cf, ua)
+        return cf, ua
     async with lucida_context(hidden=hidden) as ctx:
         if not await ensure_cleared(ctx, timeout=180):
             raise RuntimeError(
